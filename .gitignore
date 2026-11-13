@@ -73,6 +73,11 @@ wheels/
 .mypy_cache/
 .ruff_cache/
 
+# Databases
+*.db
+*.sqlite
+*.sqlite3
+
 # Large ML model weight binaries
 *.joblib
 *.pkl

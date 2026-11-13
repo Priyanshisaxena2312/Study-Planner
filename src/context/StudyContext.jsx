@@ -1,4 +1,5 @@
-import React, { createContext, useContext, useReducer, useEffect } from "react";
+import React, { createContext, useContext, useReducer, useEffect, useState } from "react";
+import { api, tokenStore } from "../services/apiClient";
 import {
   INITIAL_SETTINGS,
   INITIAL_SUBJECTS,
@@ -363,6 +364,12 @@ function studyReducer(state, action) {
         ...action.payload,
       };
     }
+    case "REPLACE_STATE": {
+      return {
+        ...state,
+        ...action.payload,
+      };
+    }
 
     default:
       return state;
@@ -373,6 +380,153 @@ const StudyContext = createContext(null);
 
 export function StudyProvider({ children }) {
   const [state, dispatch] = useReducer(studyReducer, null, loadStoredState);
+  const [currentUser, setCurrentUser] = useState(tokenStore.getUser());
+  const [backendOnline, setBackendOnline] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
+
+  // Ping backend on mount and update status
+  const checkBackendStatus = async () => {
+    try {
+      const ok = await api.checkHealth();
+      setBackendOnline(ok);
+      return ok;
+    } catch {
+      setBackendOnline(false);
+      return false;
+    }
+  };
+
+  useEffect(() => {
+    checkBackendStatus();
+  }, []);
+
+  const loadFromBackend = async () => {
+    setIsSyncing(true);
+    try {
+      const [subjectsData, sessionsData, goalsData, revisionsData, logsData] = await Promise.all([
+        api.curriculum.getSubjects(),
+        api.timetable.getSessions(),
+        api.goals.getGoals(),
+        api.revisions.getRevisions(),
+        api.focus.getLogs(),
+      ]);
+
+      const flatSubjects = [];
+      const flatChapters = [];
+      const flatTopics = [];
+
+      subjectsData.forEach((s) => {
+        flatSubjects.push({
+          id: s.id,
+          name: s.name,
+          code: s.code || "",
+          tone: s.tone || "sage",
+          examDate: s.exam_date,
+          scoreStatus: s.score_status || "On track",
+        });
+        (s.chapters || []).forEach((c) => {
+          flatChapters.push({
+            id: c.id,
+            subjectId: s.id,
+            title: c.title,
+          });
+          (c.topics || []).forEach((t) => {
+            flatTopics.push({
+              id: t.id,
+              chapterId: c.id,
+              title: t.title,
+              difficulty: t.difficulty || "Medium",
+              completed: t.completed || false,
+              estimatedMinutes: t.estimated_minutes || 45,
+              lastRevised: t.last_revised,
+            });
+          });
+        });
+      });
+
+      const formattedSessions = sessionsData.map((s) => ({
+        id: s.id,
+        day: s.day,
+        startTime: s.start_time,
+        endTime: s.end_time,
+        subjectId: s.subject_id,
+        subject: s.subject,
+        topic: s.topic,
+        tag: s.tag,
+        color: s.color,
+        notes: s.notes,
+        done: s.done,
+      }));
+
+      const formattedGoals = goalsData.map((g) => ({
+        id: g.id,
+        title: g.title,
+        type: g.goal_type,
+        category: g.category,
+        target: g.target,
+        current: g.current,
+        unit: g.unit,
+        completed: g.completed,
+      }));
+
+      const formattedRevisions = revisionsData.map((r) => ({
+        id: r.id,
+        subjectId: r.subject_id,
+        subject: r.subject,
+        topic: r.topic,
+        stage: r.stage,
+        dueDate: r.due_date,
+        intervalDays: r.interval_days,
+        completed: r.completed,
+        completedAt: r.completed_at,
+        difficulty: r.difficulty,
+      }));
+
+      dispatch({
+        type: "REPLACE_STATE",
+        payload: {
+          subjects: flatSubjects.length ? flatSubjects : state.subjects,
+          chapters: flatChapters.length ? flatChapters : state.chapters,
+          topics: flatTopics.length ? flatTopics : state.topics,
+          timetable: formattedSessions.length ? formattedSessions : state.timetable,
+          goals: formattedGoals.length ? formattedGoals : state.goals,
+          revisions: formattedRevisions.length ? formattedRevisions : state.revisions,
+          focusLogs: logsData.length ? logsData : state.focusLogs,
+        },
+      });
+      return { success: true };
+    } catch (err) {
+      console.warn("Could not load from backend:", err);
+      return { success: false, error: err.message };
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const loginUser = async (email, password) => {
+    const data = await api.auth.login(email, password);
+    setCurrentUser(tokenStore.getUser());
+    await loadFromBackend();
+    return data;
+  };
+
+  const registerUser = async (email, password, fullName) => {
+    const data = await api.auth.register(email, password, fullName);
+    setCurrentUser(tokenStore.getUser());
+    // Seed default sample data for new user
+    try {
+      await api.seed.populateSampleData();
+      await loadFromBackend();
+    } catch (e) {
+      console.warn("Seeding error:", e);
+    }
+    return data;
+  };
+
+  const logoutUser = () => {
+    api.auth.logout();
+    setCurrentUser(null);
+  };
 
   // Sync to localStorage on every state change
   useEffect(() => {
@@ -437,6 +591,14 @@ export function StudyProvider({ children }) {
     todayTotal,
     todayCompletionRate,
     weeklyHoursLogged,
+    backendOnline,
+    currentUser,
+    isSyncing,
+    loadFromBackend,
+    loginUser,
+    registerUser,
+    logoutUser,
+    checkBackendStatus,
   };
 
   return <StudyContext.Provider value={value}>{children}</StudyContext.Provider>;

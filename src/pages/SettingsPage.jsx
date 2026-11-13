@@ -15,6 +15,12 @@ import {
   Sun,
   Moon,
   Coffee,
+  Server,
+  Cloud,
+  User,
+  LogIn,
+  LogOut,
+  RefreshCw,
 } from "lucide-react";
 import { useStudy } from "../context/StudyContext";
 import { PageHeader } from "../components/common/PageHeader";
@@ -23,8 +29,28 @@ import { Button } from "../components/common/Button";
 import { FormField } from "../components/common/FormField";
 
 export function SettingsPage() {
-  const { state, dispatch } = useStudy();
+  const {
+    state,
+    dispatch,
+    backendOnline,
+    currentUser,
+    isSyncing,
+    loadFromBackend,
+    loginUser,
+    registerUser,
+    logoutUser,
+    checkBackendStatus,
+  } = useStudy();
   const settings = state.settings;
+
+  // Cloud auth & sync form state
+  const [authMode, setAuthMode] = useState("login");
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [authFullName, setAuthFullName] = useState("");
+  const [authError, setAuthError] = useState("");
+  const [authMsg, setAuthMsg] = useState("");
+  const [checkingBackend, setCheckingBackend] = useState(false);
 
   // Local form state initialized from context
   const [preferredStudyTime, setPreferredStudyTime] = useState(
@@ -76,6 +102,66 @@ export function SettingsPage() {
       setNotificationPermissionState(Notification.permission);
     }
   }, []);
+
+  async function handleCheckBackend() {
+    setCheckingBackend(true);
+    setAuthMsg("");
+    setAuthError("");
+    const ok = await checkBackendStatus();
+    setCheckingBackend(false);
+    if (ok) {
+      setAuthMsg("FastAPI backend is active and reachable on http://localhost:8000");
+    } else {
+      setAuthError("Could not reach FastAPI backend. Run 'uvicorn app.main:app --port 8000' in backend directory.");
+    }
+  }
+
+  async function handleAuthSubmit(e) {
+    e.preventDefault();
+    setAuthError("");
+    setAuthMsg("");
+    try {
+      if (authMode === "login") {
+        await loginUser(authEmail, authPassword);
+        setAuthMsg("Successfully signed in! Study data synchronized from cloud.");
+      } else {
+        await registerUser(authEmail, authPassword, authFullName || "Student");
+        setAuthMsg("Account created and sample study data seeded to cloud database!");
+      }
+      setAuthEmail("");
+      setAuthPassword("");
+    } catch (err) {
+      setAuthError(err.message || "Authentication failed");
+    }
+  }
+
+  async function handleQuickDemoLogin() {
+    setAuthError("");
+    setAuthMsg("");
+    try {
+      // Try logging in with demo user; if not exists, register first
+      try {
+        await loginUser("demo@studywell.edu", "StudyWell2026!");
+        setAuthMsg("Signed in as Demo Student! Cloud data synchronized.");
+      } catch {
+        await registerUser("demo@studywell.edu", "StudyWell2026!", "Priya Sharma");
+        setAuthMsg("Created demo account and seeded sample curriculum!");
+      }
+    } catch (err) {
+      setAuthError(err.message || "Failed to connect to demo account.");
+    }
+  }
+
+  async function handlePullCloudData() {
+    setAuthMsg("");
+    setAuthError("");
+    const res = await loadFromBackend();
+    if (res.success) {
+      setAuthMsg("Successfully fetched and refreshed data from cloud database!");
+    } else {
+      setAuthError(res.error || "Failed to load data from backend.");
+    }
+  }
 
   async function handleToggleNotifications() {
     if (!("Notification" in window)) {
@@ -369,6 +455,152 @@ export function SettingsPage() {
           </div>
         </div>
 
+        {/* Cloud Backend & Multi-Tenancy */}
+        <div className="settings-section-card">
+          <div className="section-head-row">
+            <Server size={20} className="section-icon" />
+            <div>
+              <h3>FastAPI Backend & Cloud Sync</h3>
+              <p>Connect to the multi-tenant Python backend (JWT authentication & SQLite/PostgreSQL).</p>
+            </div>
+            <div className="backend-badge-container">
+              <span className={`status-pill ${backendOnline ? "online" : "offline"}`}>
+                <span className="dot" />
+                {backendOnline ? "Backend Online" : "Local / Offline Mode"}
+              </span>
+              <Button
+                variant="secondary"
+                size="sm"
+                icon={RefreshCw}
+                onClick={handleCheckBackend}
+                disabled={checkingBackend}
+              >
+                {checkingBackend ? "Checking..." : "Ping Server"}
+              </Button>
+            </div>
+          </div>
+
+          {authMsg && (
+            <div className="form-feedback-pill success">
+              <Check size={14} /> {authMsg}
+            </div>
+          )}
+          {authError && (
+            <div className="form-feedback-pill error">
+              <AlertCircle size={14} /> {authError}
+            </div>
+          )}
+
+          {currentUser ? (
+            <div className="cloud-logged-in-box">
+              <div className="user-profile-summary">
+                <div className="user-avatar-circle">
+                  <User size={20} />
+                </div>
+                <div>
+                  <strong>{currentUser.full_name || "Active Student"}</strong>
+                  <span className="user-email-text">{currentUser.email}</span>
+                  <div className="user-mode-tag">Multi-Tenant JWT Authenticated</div>
+                </div>
+              </div>
+
+              <div className="cloud-user-actions">
+                <Button
+                  variant="primary"
+                  icon={Cloud}
+                  onClick={handlePullCloudData}
+                  disabled={isSyncing || !backendOnline}
+                >
+                  {isSyncing ? "Syncing..." : "Sync / Pull Cloud Data"}
+                </Button>
+                <Button
+                  variant="secondary"
+                  icon={LogOut}
+                  onClick={logoutUser}
+                >
+                  Sign Out
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="cloud-auth-box">
+              <div className="auth-tabs-row">
+                <button
+                  type="button"
+                  className={`auth-tab-btn ${authMode === "login" ? "active" : ""}`}
+                  onClick={() => setAuthMode("login")}
+                >
+                  <LogIn size={15} /> Sign In
+                </button>
+                <button
+                  type="button"
+                  className={`auth-tab-btn ${authMode === "register" ? "active" : ""}`}
+                  onClick={() => setAuthMode("register")}
+                >
+                  <User size={15} /> Create Account
+                </button>
+              </div>
+
+              <div className="auth-form-fields">
+                {authMode === "register" && (
+                  <FormField label="Full Name">
+                    <input
+                      type="text"
+                      className="custom-input"
+                      placeholder="e.g. Priya Sharma"
+                      value={authFullName}
+                      onChange={(e) => setAuthFullName(e.target.value)}
+                    />
+                  </FormField>
+                )}
+                <div className="form-grid-2">
+                  <FormField label="Email Address">
+                    <input
+                      type="email"
+                      className="custom-input"
+                      placeholder="you@domain.com"
+                      value={authEmail}
+                      onChange={(e) => setAuthEmail(e.target.value)}
+                    />
+                  </FormField>
+                  <FormField label="Password">
+                    <input
+                      type="password"
+                      className="custom-input"
+                      placeholder="••••••••"
+                      value={authPassword}
+                      onChange={(e) => setAuthPassword(e.target.value)}
+                    />
+                  </FormField>
+                </div>
+
+                <div className="auth-buttons-row">
+                  <Button
+                    variant="primary"
+                    onClick={handleAuthSubmit}
+                    disabled={!backendOnline || !authEmail || !authPassword}
+                  >
+                    {authMode === "login" ? "Sign In to Cloud" : "Create Cloud Account"}
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    onClick={handleQuickDemoLogin}
+                    disabled={!backendOnline}
+                    title="Automatically signs in or creates demo account"
+                  >
+                    Quick Demo Student Sign In
+                  </Button>
+                </div>
+                {!backendOnline && (
+                  <small className="server-offline-notice">
+                    Tip: Start the backend server by running <code>python -m uvicorn app.main:app --reload --port 8000</code> in the <code>backend/</code> folder to enable cloud database synchronization.
+                  </small>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+
         {/* Data Persistence, Portability & Reset */}
         <div className="settings-section-card danger-zone-card">
           <div className="section-head-row">
@@ -405,21 +637,6 @@ export function SettingsPage() {
             >
               Reset Sample Data
             </Button>
-            <div className="setting-toggle-row">
-              <div className="toggle-info">
-                <strong>Floating AI Study Buddy Mascot</strong>
-                <span>
-                  Show the cute animated study companion with helpful study tips, cheer-ups, and reminders.
-                </span>
-              </div>
-              <button
-                type="button"
-                className={`switch-btn ${mascotEnabled ? "on" : "off"}`}
-                onClick={() => setMascotEnabled(!mascotEnabled)}
-              >
-                <div className="switch-thumb" />
-              </button>
-            </div>
           </div>
         </div>
       </form>
